@@ -1,0 +1,47 @@
+schema: mcpg.dev/plugin/v1
+id: dev.mcpg.backend.oci-registry
+name: OCI Registry Binding
+license: Apache-2.0
+description: |
+  An OCI container-registry backend binding (GHCR, Docker Hub, Harbor,
+  Quay, ECR, GCR/Artifact Registry, distribution/registry — any server
+  speaking the OCI distribution API). Each binding declares one
+  read-only operation against an operator-configured registry origin +
+  repository allowlist and exposes it as one MCP tool: `catalog` (the
+  repositories the registry lists), `tags` (a repository's tags),
+  `resolve` (the digest a tag points at), `manifest` (the manifest or
+  multi-platform index, with its platforms flattened), `image_config`
+  (the image config behind a reference — labels, entrypoint, env,
+  architecture, layers, total size — selecting a platform out of an
+  index) and `referrers` (signatures, SBOMs and attestations attached to
+  a digest via the OCI 1.1 referrers API, with the tag-schema fallback).
+  Nothing pushes, deletes or downloads a layer.
+
+  Dispatches over the distribution API via reqwest (rustls-tls) with an
+  https-or-localhost origin constraint, a DNS-rebinding / SSRF guard that
+  also covers the registry-chosen token realm and storage redirects, the
+  distribution token challenge flow (anonymous or Basic-backed, tokens
+  cached per scope), credential stripping on cross-origin redirects,
+  byte caps on every body, and digest verification of every manifest and
+  blob. Auth is `none` / `basic` / `bearer` with `cred://` or `${env.X}`
+  secret resolution; the resolved secret never reaches logs or the
+  response envelope. Bindings may also serve the resource surface:
+  `resources/list` enumerates tags (or repositories) as
+  `oci://<registry>/<repository>:<tag>` and `resources/read` returns the
+  operation result for that URI.
+
+  A second `watch_strategy` entity (kind `oci_registry_poll`) lets a
+  resource subscribe to a tag's digest or a repository's tag set by
+  POLLING. Each watcher carries its own connection (`registry` / `auth` /
+  `tls`) plus the `repository` and an optional `reference`: with a
+  reference the cursor is the digest the tag resolves to (a HEAD per
+  tick), without one it is a fingerprint of the full sorted tag list, so a
+  new version tag is a change. Polls every `interval_ms` (default 60000,
+  floored at 250 ms) with a per-tick `timeout_ms` budget (default 10000)
+  and emits `notifications/resources/updated` when the value differs from
+  the previous tick; the first tick only establishes the baseline.
+class: backend
+runtime: native-cdylib-v1
+protocol_version: "1.0"
+required_capabilities:
+  - network_outbound

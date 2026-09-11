@@ -1,0 +1,49 @@
+[package]
+name = "mcpg-plugin-backend-oci-registry"
+version = "0.1.0-alpha.1"
+license = "Apache-2.0"
+edition = "2024"
+description = """
+OCI container-registry backend binding plugin for mcpg. Exposes read-only
+distribution operations — catalog, tags, resolve, manifest, image_config,
+referrers — as MCP tools (and the resource surface), dispatching over the
+OCI distribution API via reqwest (rustls-tls) with the token challenge
+flow, an https-or-localhost origin constraint, a DNS-rebinding/SSRF guard
+that also covers token realms and storage redirects, byte caps, digest
+verification of every manifest and blob, and per-caller cred:// auth
+resolution. A second watch_strategy entity polls a tag's digest or a
+repository's tag set for change notifications.
+"""
+
+[lib]
+# cdylib: the .so the gateway's native_loader dlopens. rlib: in-tree
+# unit tests + the eager new() constructor.
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+cdylib-export = []
+# Declared empty so the SDK macro's static accessor doesn't trip
+# unexpected_cfgs; oci-registry is consumed as a cdylib.
+static-firstparty = []
+
+[dependencies]
+mcpg-plugin-protocol = { git = "https://github.com/mcpg-dev/mcpg-plugin-protocol", tag = "v0.1.0-beta.24", version = "=0.1.0-beta.24" }
+mcpg-plugin-sdk = { git = "https://github.com/mcpg-dev/mcpg-plugin-sdk", tag = "v0.1.0-beta.25", version = "=0.1.0-beta.25", features = ["static-firstparty"] }
+async-trait = "0.1"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# rustls-only — deny.toml bans openssl/native-tls. Same line as the
+# elasticsearch backend: request/response only, no streaming.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2.0"
+tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "macros", "time", "net"] }
+tracing = "0.1"
+url = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net", "io-util", "time"] }
+wiremock = "0.6"
