@@ -1,13 +1,13 @@
 [package]
 name = "mcpg-plugin-backend-oci-registry"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.12"
 license = "Apache-2.0"
 edition = "2024"
 description = """
 OCI container-registry backend binding plugin for mcpg. Exposes read-only
 distribution operations — catalog, tags, resolve, manifest, image_config,
 referrers — as MCP tools (and the resource surface), dispatching over the
-OCI distribution API via reqwest (rustls-tls) with the token challenge
+OCI distribution API via reqwest (rustls) with the token challenge
 flow, an https-or-localhost origin constraint, a DNS-rebinding/SSRF guard
 that also covers token realms and storage redirects, byte caps, digest
 verification of every manifest and blob, and per-caller cred:// auth
@@ -28,17 +28,18 @@ cdylib-export = []
 static-firstparty = []
 
 [dependencies]
-mcpg-plugin-protocol = { git = "https://github.com/mcpg-dev/mcpg-plugin-protocol", tag = "v0.1.0-beta.29", version = "=0.1.0-beta.29" }
-mcpg-plugin-sdk = { git = "https://github.com/mcpg-dev/mcpg-plugin-sdk", tag = "v0.1.0-beta.30", version = "=0.1.0-beta.30", features = ["static-firstparty"] }
+mcpg-plugin-protocol = { git = "https://github.com/mcpg-dev/mcpg-plugin-protocol", tag = "v0.1.0-beta.35", version = "=0.1.0-beta.35" }
+mcpg-plugin-sdk = { git = "https://github.com/mcpg-dev/mcpg-plugin-sdk", tag = "v0.1.0-beta.36", version = "=0.1.0-beta.36", features = ["static-firstparty"] }
 async-trait = "0.1"
-base64 = "0.22"
+base64 = "0.23"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # rustls-only — deny.toml bans openssl/native-tls. Same line as the
 # elasticsearch backend: request/response only, no streaming.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+hex = "0.4"
+sha2 = "0.11"
 thiserror = "2.0"
 tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "macros", "time", "net"] }
 tracing = "0.1"

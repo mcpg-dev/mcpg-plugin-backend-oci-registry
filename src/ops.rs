@@ -323,7 +323,7 @@ pub struct VerifiedManifest {
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    format!("sha256:{:x}", Sha256::digest(bytes))
+    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
 /// Fetch a manifest and verify its bytes against the digest requested (when

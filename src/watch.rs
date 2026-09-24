@@ -113,7 +113,10 @@ async fn poll_once(
                     if got.status != 200 {
                         return Ok(None);
                     }
-                    Ok(Some(format!("sha256:{:x}", Sha256::digest(&got.body))))
+                    Ok(Some(format!(
+                        "sha256:{}",
+                        hex::encode(Sha256::digest(&got.body))
+                    )))
                 }
                 (404, _) => Ok(None),
                 (status, _) => Err(format!("registry answered {status} for {repository}:{tag}")),
@@ -167,7 +170,11 @@ async fn poll_once(
                 h.update(t.as_bytes());
                 h.update(b"\n");
             }
-            Ok(Some(format!("tags:{}:{:x}", tags.len(), h.finalize())))
+            Ok(Some(format!(
+                "tags:{}:{}",
+                tags.len(),
+                hex::encode(h.finalize())
+            )))
         }
     }
 }
