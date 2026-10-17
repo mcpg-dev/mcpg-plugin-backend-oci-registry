@@ -35,8 +35,8 @@ description: |
   POLLING. Each watcher carries its own connection (`registry` / `auth` /
   `tls`) plus the `repository` and an optional `reference`: with a
   reference the cursor is the digest the tag resolves to (a HEAD per
-  tick), without one it is a fingerprint of the full sorted tag list, so a
-  new version tag is a change. Polls every `interval_ms` (default 60000,
+  tick), without one it is the full tag list, so a new version tag is a
+  change. Polls every `interval_ms` (default 60000,
   floored at 250 ms) with a per-tick `timeout_ms` budget (default 10000)
   and emits `notifications/resources/updated` when the value differs from
   the previous tick; the first tick only establishes the baseline.
@@ -45,3 +45,39 @@ runtime: native-cdylib-v1
 protocol_version: "1.0"
 required_capabilities:
   - network_outbound
+# MCP Events: how the oci_registry_poll watch runs as a source, and what it emits.
+watch_strategies:
+  - kind: oci_registry_poll
+    placement: single_owner
+    resume: false
+    event_types:
+      - name: oci.tag.pushed
+        description: A tag appeared. With a watched reference, one event per repository, tag and digest.
+        payload_schema:
+          type: object
+          required: [repository, tag]
+          properties:
+            repository: { type: string }
+            tag: { type: string }
+            digest: { type: [string, "null"] }
+            previousDigest: { type: [string, "null"] }
+      - name: oci.tag.moved
+        description: A watched tag resolves to a new digest.
+        payload_schema:
+          type: object
+          required: [repository, tag]
+          properties:
+            repository: { type: string }
+            tag: { type: string }
+            digest: { type: [string, "null"] }
+            previousDigest: { type: [string, "null"] }
+      - name: oci.tag.deleted
+        description: A tag went away.
+        payload_schema:
+          type: object
+          required: [repository, tag]
+          properties:
+            repository: { type: string }
+            tag: { type: string }
+            digest: { type: [string, "null"] }
+            previousDigest: { type: [string, "null"] }

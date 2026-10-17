@@ -172,9 +172,15 @@ A resource can subscribe to a registry through the plugin's second entity —
 a **polling `watch_strategy`** (kind `oci_registry_poll`). Registries have no
 change-push channel, but two cheap reads tell whether an image moved: with a
 `reference`, the cursor is the digest the tag resolves to (a `HEAD` per
-tick), so a re-pushed `latest` fires; without one, the cursor is a
-fingerprint of the repository's full sorted tag set, so a new version tag
-fires. The first tick only records a baseline.
+tick), so a re-pushed `latest` fires; without one, the cursor is the
+repository's full tag set, so a new version tag fires. A missing tag or
+repository is a state too, so its first push fires. The first tick only
+records a baseline.
+
+As an MCP Events source (`watch.event_type`), the same watch raises
+`oci.tag.pushed`, `oci.tag.moved` and `oci.tag.deleted` with the
+repository, the tag and the digests. A watched tag reports all three; a
+tag set reports pushes and deletions, without digests.
 
 ```yaml
 mcp:

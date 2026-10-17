@@ -17,13 +17,14 @@
 //! current-thread runtime is built once in [`watch`] and `block_on`s each
 //! tick.
 
+use std::collections::BTreeSet;
 use std::time::Duration;
 
-use mcpg_plugin_protocol::backend::WatchError;
+use mcpg_plugin_protocol::backend::{WatchError, WatchEvent};
 use mcpg_plugin_protocol::{PluginManifest, firstparty_manifest};
 use mcpg_plugin_sdk::HostHandle;
 use mcpg_plugin_sdk::ffi::{SyncWatchStrategyPlugin, WatchHandleBox};
-use mcpg_plugin_sdk::watch::{cancel_polling_watch, spawn_polling_watch};
+use mcpg_plugin_sdk::watch::{cancel_polling_watch, spawn_diffing_watch};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -91,34 +92,95 @@ impl OciRegistryWatchCdylib {
     }
 }
 
-/// One tick: the digest the tag resolves to, or the fingerprint of the tag
-/// set. `Ok(None)` is "no signal" (a 404 on a tag that does not exist yet,
-/// an empty repository); a transport failure is `Err` for the helper to log
-/// and retry.
+/// The event type of a tag that appears.
+pub const TAG_PUSHED_EVENT_TYPE: &str = "oci.tag.pushed";
+/// The event type of a tag that resolves to a new digest.
+pub const TAG_MOVED_EVENT_TYPE: &str = "oci.tag.moved";
+/// The event type of a tag that goes away.
+pub const TAG_DELETED_EVENT_TYPE: &str = "oci.tag.deleted";
+
+/// What one tick saw.
+#[derive(Debug, Clone, PartialEq)]
+enum Observed {
+    /// The digest the watched tag resolves to; `None` while it is absent.
+    Tag(Option<String>),
+    /// The repository's tags.
+    Tags(BTreeSet<String>),
+}
+
+/// The events between two ticks. A watched tag reports a push, a move and a
+/// deletion; a tag set reports pushes and deletions, with no digest.
+fn tag_events(
+    repository: &str,
+    reference: Option<&str>,
+    prev: &Observed,
+    cur: &Observed,
+) -> Vec<WatchEvent> {
+    let event =
+        |event_type: &str, tag: &str, digest: Option<&str>, previous: Option<&str>| WatchEvent {
+            event_id: digest.map(|d| format!("{repository}:{tag}@{d}")),
+            event_type: Some(event_type.to_owned()),
+            data: Some(json!({
+                "repository": repository,
+                "tag": tag,
+                "digest": digest,
+                "previousDigest": previous,
+            })),
+            ..WatchEvent::default()
+        };
+    match (prev, cur) {
+        (Observed::Tag(prev), Observed::Tag(cur)) => {
+            let tag = reference.unwrap_or_default();
+            match (prev.as_deref(), cur.as_deref()) {
+                (None, Some(d)) => vec![event(TAG_PUSHED_EVENT_TYPE, tag, Some(d), None)],
+                (Some(p), Some(d)) if p != d => {
+                    vec![event(TAG_MOVED_EVENT_TYPE, tag, Some(d), Some(p))]
+                }
+                (Some(p), None) => vec![event(TAG_DELETED_EVENT_TYPE, tag, None, Some(p))],
+                _ => Vec::new(),
+            }
+        }
+        (Observed::Tags(prev), Observed::Tags(cur)) => cur
+            .difference(prev)
+            .map(|t| event(TAG_PUSHED_EVENT_TYPE, t, None, None))
+            .chain(
+                prev.difference(cur)
+                    .map(|t| event(TAG_DELETED_EVENT_TYPE, t, None, None)),
+            )
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// One tick: the digest the tag resolves to, or the repository's tag set.
+/// A missing tag or repository is an observation too, so a later push is a
+/// change; a transport failure is `Err` for the helper to log and retry.
 async fn poll_once(
     client: &RegistryClient,
     repository: &str,
     reference: Option<&str>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<Observed>, String> {
     match reference {
         Some(tag) => {
             let path = format!("/v2/{repository}/manifests/{tag}");
             let scope = format!("repository:{repository}:pull");
             let head = client.head(&path, MANIFEST_ACCEPT, &scope).await?;
             match (head.status, head.header("docker-content-digest")) {
-                (200, Some(d)) if validate_digest(d).is_ok() => Ok(Some(d.to_owned())),
+                (200, Some(d)) if validate_digest(d).is_ok() => {
+                    Ok(Some(Observed::Tag(Some(d.to_owned()))))
+                }
                 (200, _) => {
                     // No digest header: hash the manifest bytes instead.
                     let got = client.get(&path, MANIFEST_ACCEPT, &scope).await?;
                     if got.status != 200 {
                         return Ok(None);
                     }
-                    Ok(Some(format!(
+                    Ok(Some(Observed::Tag(Some(format!(
                         "sha256:{}",
                         hex::encode(Sha256::digest(&got.body))
-                    )))
+                    )))))
                 }
-                (404, _) => Ok(None),
+                (404, _) => Ok(Some(Observed::Tag(None))),
                 (status, _) => Err(format!("registry answered {status} for {repository}:{tag}")),
             }
         }
@@ -134,7 +196,7 @@ async fn poll_once(
                 }
                 let resp = client.get(&path, "application/json", &scope).await?;
                 if resp.status == 404 {
-                    return Ok(None);
+                    return Ok(Some(Observed::Tags(BTreeSet::new())));
                 }
                 if resp.status != 200 {
                     return Err(format!(
@@ -160,21 +222,7 @@ async fn poll_once(
                     _ => break,
                 }
             }
-            if tags.is_empty() {
-                return Ok(None);
-            }
-            tags.sort();
-            tags.dedup();
-            let mut h = Sha256::new();
-            for t in &tags {
-                h.update(t.as_bytes());
-                h.update(b"\n");
-            }
-            Ok(Some(format!(
-                "tags:{}:{}",
-                tags.len(),
-                hex::encode(h.finalize())
-            )))
+            Ok(Some(Observed::Tags(tags.into_iter().collect())))
         }
     }
 }
@@ -233,13 +281,98 @@ impl SyncWatchStrategyPlugin for OciRegistryWatchCdylib {
         let reference = backend_spec.default_reference.clone();
         let interval = Duration::from_millis(parsed.interval_ms);
 
-        let handle = spawn_polling_watch(resource_uri, interval, emit_event, move || {
-            rt.block_on(poll_once(&client, &repository, reference.as_deref()))
-        });
+        let (diff_repository, diff_reference) = (repository.clone(), reference.clone());
+        let handle = spawn_diffing_watch(
+            resource_uri,
+            interval,
+            emit_event,
+            move || rt.block_on(poll_once(&client, &repository, reference.as_deref())),
+            move |prev, cur| tag_events(&diff_repository, diff_reference.as_deref(), prev, cur),
+        );
         Ok(handle)
     }
 
     fn cancel(&self, handle: WatchHandleBox) {
         cancel_polling_watch(handle);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tag(digest: Option<&str>) -> Observed {
+        Observed::Tag(digest.map(str::to_owned))
+    }
+
+    fn kinds(events: &[WatchEvent]) -> Vec<(String, Value)> {
+        events
+            .iter()
+            .map(|e| (e.event_type.clone().unwrap(), e.data.clone().unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn a_watched_tag_reports_a_push_a_move_and_a_deletion() {
+        let pushed = tag_events(
+            "acme/app",
+            Some("latest"),
+            &tag(None),
+            &tag(Some("sha256:a")),
+        );
+        assert_eq!(
+            pushed[0].event_id.as_deref(),
+            Some("acme/app:latest@sha256:a")
+        );
+        let moved = tag_events(
+            "acme/app",
+            Some("latest"),
+            &tag(Some("sha256:a")),
+            &tag(Some("sha256:b")),
+        );
+        let deleted = tag_events(
+            "acme/app",
+            Some("latest"),
+            &tag(Some("sha256:b")),
+            &tag(None),
+        );
+        assert_eq!(
+            kinds(&[pushed, moved, deleted].concat()),
+            vec![
+                (
+                    TAG_PUSHED_EVENT_TYPE.to_owned(),
+                    json!({"repository": "acme/app", "tag": "latest", "digest": "sha256:a", "previousDigest": null})
+                ),
+                (
+                    TAG_MOVED_EVENT_TYPE.to_owned(),
+                    json!({"repository": "acme/app", "tag": "latest", "digest": "sha256:b", "previousDigest": "sha256:a"})
+                ),
+                (
+                    TAG_DELETED_EVENT_TYPE.to_owned(),
+                    json!({"repository": "acme/app", "tag": "latest", "digest": null, "previousDigest": "sha256:b"})
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tag_set_reports_each_new_and_each_gone_tag() {
+        let set = |tags: &[&str]| Observed::Tags(tags.iter().map(|t| (*t).to_owned()).collect());
+        let events = tag_events("acme/app", None, &set(&["v1", "v2"]), &set(&["v2", "v3"]));
+        let tags: Vec<(String, Value)> = kinds(&events)
+            .into_iter()
+            .map(|(kind, data)| (kind, data["tag"].clone()))
+            .collect();
+        assert_eq!(
+            tags,
+            vec![
+                (TAG_PUSHED_EVENT_TYPE.to_owned(), json!("v3")),
+                (TAG_DELETED_EVENT_TYPE.to_owned(), json!("v1")),
+            ]
+        );
+        assert!(
+            events.iter().all(|e| e.event_id.is_none()),
+            "no digest, so the host assigns ids"
+        );
     }
 }
