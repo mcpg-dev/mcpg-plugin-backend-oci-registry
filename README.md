@@ -57,7 +57,7 @@ metadata.
 | `auth` | object | `{kind: none}` | `none`, `basic {username, password}` or `bearer {token}` — see below. |
 | `tls.ca_cert_pem` | string | — | Inline PEM CA for a private registry. |
 | `tls.insecure_skip_verify` | bool | `false` | Loopback registries only; register fails otherwise. |
-| `allow_private_backends` | bool | `false` | Allow private/loopback resolved addresses (in-cluster registries). |
+| `allow_private_backends` | bool | `gateway.server.allow_private_backends` | Allow private/loopback resolved addresses (in-cluster registries). The gateway sets it for every binding from `gateway.server.allow_private_backends`; a value in the binding is replaced. |
 | `connect_timeout_ms` / `operation_timeout_ms` | int | `5000` / `30000` | Per-request budgets. |
 | `max_response_bytes` | int | `4194304` | Cap on any single body read; manifests and configs are small documents. |
 | `page_size` | int | `100` | Default page size for `catalog`, `tags` and `resources/list`. |
