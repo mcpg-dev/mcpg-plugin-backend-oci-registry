@@ -718,6 +718,7 @@ mod tests {
                     session_id: None,
                     identity: None,
                     idempotency: None,
+                    client: None,
                 },
             )
             .await
@@ -747,6 +748,7 @@ mod tests {
             session_id: None,
             identity: None,
             idempotency: None,
+            client: None,
         };
         for (payload, needle) in [
             ("{not json", "invalid tool arguments JSON"),
